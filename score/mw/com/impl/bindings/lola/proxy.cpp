@@ -584,6 +584,31 @@ bool Proxy::IsEventProvided(const std::string_view event_name) const noexcept
     return event_exists;
 }
 
+bool Proxy::IsMethodProvided(const std::string_view method_name) const noexcept
+{
+    SCORE_LANGUAGE_FUTURECPP_PRECONDITION_PRD_MESSAGE(data_ != nullptr,
+                                                      "IsMethodProvided: Managed memory data pointer is Null");
+
+    // Resolve the method name against the deployment first. If the name is not part of the
+    // service type, we know the proxy has nothing to ask for.
+    const auto& lola_type_deployment = GetLoLaServiceTypeDeployment(handle_);
+    const auto method_it = lola_type_deployment.methods_.find(std::string{method_name});
+    if (method_it == lola_type_deployment.methods_.end())
+    {
+        return false;
+    }
+
+    const auto instance_id = handle_.GetInstanceId();
+    const auto* const lola_instance_id = std::get_if<LolaServiceInstanceId>(&(instance_id.binding_info_));
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD_MESSAGE(lola_instance_id != nullptr,
+                                                "ServiceInstanceId does not contain lola binding.");
+    const ElementFqId element_fq_id{
+        lola_type_deployment.service_id_, method_it->second, lola_instance_id->GetId(), ServiceElementType::METHOD};
+
+    const auto& service_data_storage = detail_proxy::GetServiceDataStorage(*data_);
+    return service_data_storage.methods_metainfo_.find(element_fq_id) != service_data_storage.methods_metainfo_.end();
+}
+
 void Proxy::RegisterEventBinding(const std::string_view service_element_name,
                                  ProxyEventBindingBase& proxy_event_binding) noexcept
 {
