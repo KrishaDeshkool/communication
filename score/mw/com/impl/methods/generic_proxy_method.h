@@ -50,6 +50,10 @@ class GenericProxyMethod final : public ProxyMethodBase
                        std::unique_ptr<ProxyMethodBinding> binding,
                        std::string_view method_name) noexcept;
 
+    /// Production ctor. Obtains the binding from GenericProxyMethodBindingFactory, which reads
+    /// the method's size info from shared memory and builds the appropriate lola::ProxyMethod.
+    GenericProxyMethod(ProxyBase& parent, std::string_view method_name) noexcept;
+
     ~GenericProxyMethod() final = default;
 
     GenericProxyMethod(const GenericProxyMethod&) = delete;

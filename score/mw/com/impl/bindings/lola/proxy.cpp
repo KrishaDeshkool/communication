@@ -545,6 +545,19 @@ EventControl& Proxy::GetEventControl(const ElementFqId element_fq_id) noexcept
 // value is not comparable and in our case the key is comparable. so no way for 'event_controls_.find()' to throw an
 // exception.
 // coverity[autosar_cpp14_a15_5_3_violation : FALSE]
+std::optional<MethodMetaInfo> Proxy::GetMethodMetaInfo(const ElementFqId element_fq_id) const noexcept
+{
+    SCORE_LANGUAGE_FUTURECPP_PRECONDITION_PRD_MESSAGE(data_ != nullptr,
+                                                      "Proxy::GetMethodMetaInfo: Managed memory data pointer is Null");
+    const auto& service_data_storage = detail_proxy::GetServiceDataStorage(*data_);
+    const auto entry = service_data_storage.methods_metainfo_.find(element_fq_id);
+    if (entry == service_data_storage.methods_metainfo_.end())
+    {
+        return std::nullopt;
+    }
+    return entry->second;
+}
+
 const EventMetaInfo& Proxy::GetEventMetaInfo(const ElementFqId element_fq_id) const noexcept
 {
     SCORE_LANGUAGE_FUTURECPP_PRECONDITION_PRD_MESSAGE(data_ != nullptr,
