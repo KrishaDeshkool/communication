@@ -28,6 +28,44 @@
 
 namespace score::mw::com::impl::lola
 {
+
+template <typename SampleType>
+class SkeletonEventAttorney
+{
+  public:
+    explicit SkeletonEventAttorney(SkeletonEvent<SampleType>& skeleton_event) noexcept : skeleton_event_{skeleton_event}
+    {
+    }
+
+    void SetQmDisconnect(const bool value)
+    {
+        skeleton_event_.qm_disconnect_ = value;
+    }
+
+    void SetQmNotificationsRegistered(const bool value)
+    {
+        skeleton_event_.event_shared_impl_.SetQmNotificationsRegistered(value);
+    }
+
+    void SetAsilBNotificationsRegistered(const bool value)
+    {
+        skeleton_event_.event_shared_impl_.SetAsilBNotificationsRegistered(value);
+    }
+
+    bool IsQmNotificationsRegistered() const noexcept
+    {
+        return skeleton_event_.event_shared_impl_.IsQmNotificationsRegistered();
+    }
+
+    bool IsAsilBNotificationsRegistered() const noexcept
+    {
+        return skeleton_event_.event_shared_impl_.IsAsilBNotificationsRegistered();
+    }
+
+  private:
+    SkeletonEvent<SampleType>& skeleton_event_;
+};
+
 namespace
 {
 
@@ -444,6 +482,182 @@ TEST_F(SkeletonEventTimestampFixture, SendUpdatesTimestampInControlData)
     const auto second_timestamp = second_final_slot_status.GetTimeStamp();
     EXPECT_EQ(second_timestamp, first_timestamp + 1U)
         << "The second timestamp should be exactly one greater than the first.";
+}
+
+using SkeletonEventSendNotificationFixture = SkeletonEventFixture;
+TEST_F(SkeletonEventSendNotificationFixture, SendNotifiesQmWhenQmHandlersRegistered)
+{
+    const bool enforce_max_samples{true};
+
+    // Given an offered skeleton event with QM notification handlers registered
+    InitialiseSkeletonEvent(fake_element_fq_id_, fake_event_name_, max_samples_, max_subscribers_, enforce_max_samples);
+    std::ignore = skeleton_event_->PrepareOffer();
+
+    SkeletonEventAttorney<test::TestSampleType> attorney{*skeleton_event_};
+    attorney.SetQmNotificationsRegistered(true);
+
+    // Expect, that NotifyEvent is called for QM
+    EXPECT_CALL(message_passing_mock_, NotifyEvent(impl::QualityType::kASIL_QM, fake_element_fq_id_)).Times(1);
+    // Expect, that NotifyEvent is NOT called for ASIL-B (no ASIL-B handlers registered)
+    EXPECT_CALL(message_passing_mock_, NotifyEvent(impl::QualityType::kASIL_B, fake_element_fq_id_)).Times(0);
+
+    // When allocating and sending a sample
+    auto allocate_result = skeleton_event_->Allocate();
+    ASSERT_TRUE(allocate_result.has_value());
+    auto send_result = skeleton_event_->Send(std::move(allocate_result).value(), score::cpp::nullopt);
+
+    // Then the send succeeds
+    EXPECT_TRUE(send_result.has_value());
+}
+
+TEST_F(SkeletonEventSendNotificationFixture, SendNotifiesAsilBWhenAsilBHandlersRegistered)
+{
+    const bool enforce_max_samples{true};
+
+    // Given an offered skeleton event with both QM and ASIL-B notification handlers registered
+    InitialiseSkeletonEvent(fake_element_fq_id_, fake_event_name_, max_samples_, max_subscribers_, enforce_max_samples);
+    std::ignore = skeleton_event_->PrepareOffer();
+
+    SkeletonEventAttorney<test::TestSampleType> attorney{*skeleton_event_};
+    attorney.SetQmNotificationsRegistered(true);
+    attorney.SetAsilBNotificationsRegistered(true);
+
+    // Expect, that NotifyEvent is called for both QM and ASIL-B
+    EXPECT_CALL(message_passing_mock_, NotifyEvent(impl::QualityType::kASIL_QM, fake_element_fq_id_)).Times(1);
+    EXPECT_CALL(message_passing_mock_, NotifyEvent(impl::QualityType::kASIL_B, fake_element_fq_id_)).Times(1);
+
+    // When allocating and sending a sample
+    auto allocate_result = skeleton_event_->Allocate();
+    ASSERT_TRUE(allocate_result.has_value());
+    auto send_result = skeleton_event_->Send(std::move(allocate_result).value(), score::cpp::nullopt);
+
+    // Then the send succeeds
+    EXPECT_TRUE(send_result.has_value());
+}
+
+TEST_F(SkeletonEventSendNotificationFixture, SendDoesNotNotifyWhenNoHandlersRegistered)
+{
+    const bool enforce_max_samples{true};
+
+    // Given an offered skeleton event with NO notification handlers registered
+    InitialiseSkeletonEvent(fake_element_fq_id_, fake_event_name_, max_samples_, max_subscribers_, enforce_max_samples);
+    std::ignore = skeleton_event_->PrepareOffer();
+
+    // Expect, that NotifyEvent is NOT called for any quality level (no handlers registered)
+    EXPECT_CALL(message_passing_mock_, NotifyEvent(_, _)).Times(0);
+
+    // When allocating and sending a sample
+    auto allocate_result = skeleton_event_->Allocate();
+    ASSERT_TRUE(allocate_result.has_value());
+    auto send_result = skeleton_event_->Send(std::move(allocate_result).value(), score::cpp::nullopt);
+
+    // Then the send succeeds
+    EXPECT_TRUE(send_result.has_value());
+}
+
+TEST_F(SkeletonEventSendNotificationFixture, SendDoesNotNotifyQmWhenQmDisconnectedButStillNotifiesAsilB)
+{
+    const bool enforce_max_samples{true};
+
+    // Given an offered skeleton event with QM and ASIL-B handlers registered, but QM consumers disconnected
+    InitialiseSkeletonEvent(fake_element_fq_id_, fake_event_name_, max_samples_, max_subscribers_, enforce_max_samples);
+    std::ignore = skeleton_event_->PrepareOffer();
+
+    SkeletonEventAttorney<test::TestSampleType> attorney{*skeleton_event_};
+    attorney.SetQmNotificationsRegistered(true);
+    attorney.SetAsilBNotificationsRegistered(true);
+    attorney.SetQmDisconnect(true);
+
+    // Expect, that QM notification is suppressed due to qm_disconnect_
+    EXPECT_CALL(message_passing_mock_, NotifyEvent(impl::QualityType::kASIL_QM, _)).Times(0);
+    // Expect, that ASIL-B notification still fires (not affected by qm_disconnect_)
+    EXPECT_CALL(message_passing_mock_, NotifyEvent(impl::QualityType::kASIL_B, fake_element_fq_id_)).Times(1);
+
+    // When allocating and sending a sample
+    auto allocate_result = skeleton_event_->Allocate();
+    ASSERT_TRUE(allocate_result.has_value());
+    auto send_result = skeleton_event_->Send(std::move(allocate_result).value(), score::cpp::nullopt);
+
+    // Then the send succeeds
+    EXPECT_TRUE(send_result.has_value());
+}
+
+TEST_F(SkeletonEventSendNotificationFixture, SendByCopyReturnsErrorWhenAllocationFails)
+{
+    const bool enforce_max_samples{true};
+
+    // Given an event that hasn't been offered yet (PrepareOffer not called, so event_data_control_composite_ is empty)
+    InitialiseSkeletonEvent(fake_element_fq_id_, fake_event_name_, max_samples_, max_subscribers_, enforce_max_samples);
+
+    // When sending a value by copy (which internally tries to Allocate)
+    const test::TestSampleType value{42U};
+    auto send_result = skeleton_event_->Send(value, score::cpp::nullopt);
+
+    // Then the send fails with kSampleAllocationFailure
+    ASSERT_FALSE(send_result.has_value());
+    EXPECT_EQ(send_result.error(), ComErrc::kSampleAllocationFailure);
+}
+
+TEST_F(SkeletonEventAllocateFixture, SecondAllocationFailureDoesNotDisconnectQmConsumersAgain)
+{
+    const bool enforce_max_samples{true};
+
+    // Given an offered event with all slots allocated
+    InitialiseSkeletonEvent(fake_element_fq_id_, fake_event_name_, max_samples_, max_subscribers_, enforce_max_samples);
+    std::ignore = skeleton_event_->PrepareOffer();
+
+    std::vector<impl::SampleAllocateePtr<test::TestSampleType>> pointer_collection{max_samples_};
+    for (std::size_t counter = 0; counter < max_samples_; ++counter)
+    {
+        auto allocate_result = skeleton_event_->Allocate();
+        ASSERT_TRUE(allocate_result.has_value());
+        pointer_collection[counter] = std::move(allocate_result).value();
+    }
+
+    // Expect DisconnectQmConsumers to be called exactly once across multiple failing allocations
+    EXPECT_CALL(service_discovery_mock_, StopOfferService(_, IServiceDiscovery::QualityTypeSelector::kAsilQm)).Times(1);
+
+    // When allocating twice more (both fail since all slots are taken)
+    auto first_fail = skeleton_event_->Allocate();
+    EXPECT_FALSE(first_fail.has_value());
+
+    // Then the second failing allocation should NOT trigger another QM disconnect
+    auto second_fail = skeleton_event_->Allocate();
+    EXPECT_FALSE(second_fail.has_value());
+}
+
+using SkeletonEventPrepareStopOfferAfterOfferFixture = SkeletonEventFixture;
+TEST_F(SkeletonEventPrepareStopOfferAfterOfferFixture,
+       PrepareStopOfferAfterOfferResetsNotificationFlagsAndUnregistersCallbacks)
+{
+    const bool enforce_max_samples{true};
+
+    // Given an offered skeleton event with QM and ASIL-B notification handlers registered
+    InitialiseSkeletonEvent(fake_element_fq_id_, fake_event_name_, max_samples_, max_subscribers_, enforce_max_samples);
+    std::ignore = skeleton_event_->PrepareOffer();
+
+    SkeletonEventAttorney<test::TestSampleType> attorney{*skeleton_event_};
+    attorney.SetQmNotificationsRegistered(true);
+    attorney.SetAsilBNotificationsRegistered(true);
+
+    // Verify notifications are registered
+    EXPECT_TRUE(attorney.IsQmNotificationsRegistered());
+    EXPECT_TRUE(attorney.IsAsilBNotificationsRegistered());
+
+    // Expect unregistration calls for both QM and ASIL-B
+    EXPECT_CALL(message_passing_mock_,
+                UnregisterEventNotificationExistenceChangedCallback(impl::QualityType::kASIL_QM, fake_element_fq_id_))
+        .Times(1);
+    EXPECT_CALL(message_passing_mock_,
+                UnregisterEventNotificationExistenceChangedCallback(impl::QualityType::kASIL_B, fake_element_fq_id_))
+        .Times(1);
+
+    // When stop offering the event
+    skeleton_event_->PrepareStopOffer();
+
+    // Then the notification flags should be reset
+    EXPECT_FALSE(attorney.IsQmNotificationsRegistered());
+    EXPECT_FALSE(attorney.IsAsilBNotificationsRegistered());
 }
 
 }  // namespace

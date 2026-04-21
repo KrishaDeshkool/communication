@@ -1555,5 +1555,96 @@ TEST(SkeletonFieldSetHandlerTest, SecondRegisterSetHandlerReplacesHandler)
     EXPECT_TRUE(second_callback_called);
 }
 
+/// Tests for SkeletonField automatic creation of get_method_ and set_method_ members.
+
+TEST(SkeletonFieldGetSetMemberTest, SkeletonFieldWithoutSetCreatesGetMethodMember)
+{
+    // Given a SkeletonField with EnableSet=false (default)
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonMethodBindingFactoryMockGuard skeleton_method_binding_factory_mock_guard{};
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, _))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+    EXPECT_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_, Create(_, _, _, _))
+        .WillOnce(Return(ByMove(nullptr)));
+
+    // When constructing a SkeletonField<T, false>
+    MyDummySkeleton unit{std::make_unique<mock_binding::Skeleton>(), kInstanceIdWithLolaBinding};
+
+    // Then the field is registered on the skeleton and construction succeeds
+    // (get_method_ is created automatically via in-class initializer using FieldOnlyConstructorEnabler)
+    const auto& fields = SkeletonBaseView{unit}.GetFields();
+    EXPECT_EQ(fields.size(), 1U);
+}
+
+TEST(SkeletonFieldGetSetMemberTest, SkeletonFieldWithSetCreatesGetAndSetMethodMembers)
+{
+    // Given a SkeletonField with EnableSet=true
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonMethodBindingFactoryMockGuard skeleton_method_binding_factory_mock_guard{};
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, _))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+    EXPECT_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_, Create(_, _, _, MethodType::kSet))
+        .WillOnce(Return(ByMove(nullptr)));
+    EXPECT_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_, Create(_, _, _, MethodType::kGet))
+        .WillOnce(Return(ByMove(nullptr)));
+
+    // When constructing a SkeletonField<T, true>
+    MySetterSkeleton unit{std::make_unique<mock_binding::Skeleton>(), kInstanceIdWithLolaBinding};
+
+    // Then the field is registered on the skeleton and construction succeeds
+    // (both get_method_ and set_method_ are created via FieldOnlyConstructorEnabler)
+    const auto& fields = SkeletonBaseView{unit}.GetFields();
+    EXPECT_EQ(fields.size(), 1U);
+}
+
+TEST(SkeletonFieldGetSetMemberTest, SkeletonMethodBindingFactoryCalledWithGetMethodType)
+{
+    // Given a SkeletonField being constructed
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonMethodBindingFactoryMockGuard skeleton_method_binding_factory_mock_guard{};
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, _))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+
+    // Then the skeleton method binding factory is called with kGet method type
+    EXPECT_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_,
+                Create(_, _, _, ::score::mw::com::impl::MethodType::kGet))
+        .WillOnce(Return(ByMove(nullptr)));
+
+    // When constructing a SkeletonField<T, false>
+    MyDummySkeleton unit{std::make_unique<mock_binding::Skeleton>(), kInstanceIdWithLolaBinding};
+}
+
+TEST(SkeletonFieldGetSetMemberTest, SkeletonMethodBindingFactoryCalledWithSetMethodType)
+{
+    // Given a SkeletonField with EnableSet=true being constructed
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonMethodBindingFactoryMockGuard skeleton_method_binding_factory_mock_guard{};
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, _))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+
+    // Then the skeleton method binding factory is called with both kGet and kSet
+    EXPECT_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_,
+                Create(_, _, _, ::score::mw::com::impl::MethodType::kGet))
+        .WillOnce(Return(ByMove(nullptr)));
+    EXPECT_CALL(skeleton_method_binding_factory_mock_guard.factory_mock_,
+                Create(_, _, _, ::score::mw::com::impl::MethodType::kSet))
+        .WillOnce(Return(ByMove(nullptr)));
+
+    // When constructing a SkeletonField<T, true>
+    MySetterSkeleton unit{std::make_unique<mock_binding::Skeleton>(), kInstanceIdWithLolaBinding};
+}
+
 }  // namespace
 }  // namespace score::mw::com::impl

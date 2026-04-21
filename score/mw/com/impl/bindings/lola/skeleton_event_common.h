@@ -46,6 +46,7 @@ class SkeletonEventCommon
 
     template <typename SampleType>
     friend class SkeletonEventAttorney;
+    friend class GenericSkeletonEventAttorney;
 
   public:
     SkeletonEventCommon(Skeleton& parent,

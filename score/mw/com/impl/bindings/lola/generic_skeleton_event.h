@@ -32,6 +32,12 @@ class Skeleton;
 /// @brief The LoLa binding implementation for a generic skeleton event.
 class GenericSkeletonEvent : public GenericSkeletonEventBinding
 {
+    // Suppress "AUTOSAR C++14 A11-3-1", The rule declares: "Friend declarations shall not be used".
+    // Design decision: The "GenericSkeletonEventAttorney" class is a helper, which sets the internal state of this
+    // class accessing private members and used for testing purposes only.
+    // coverity[autosar_cpp14_a11_3_1_violation]
+    friend class GenericSkeletonEventAttorney;
+
   public:
     GenericSkeletonEvent(Skeleton& parent,
                          const SkeletonEventProperties& event_properties,

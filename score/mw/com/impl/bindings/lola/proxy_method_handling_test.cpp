@@ -117,6 +117,27 @@ const ConfigurationStore kConfigurationStore{InstanceSpecifier::Create(std::stri
                                              kLolaServiceTypeDeploymentWithMethods,
                                              kLolaServiceInstanceDeploymentWithMethods};
 
+// Deployment configuration that includes fields alongside methods.
+const std::string kDummyFieldName{"my_dummy_field"};
+constexpr LolaServiceElementId kDummyFieldId{20U};
+
+const LolaServiceInstanceDeployment kLolaServiceInstanceDeploymentWithFields{
+    kLolaInstanceId,
+    {},
+    {{kDummyFieldName, LolaFieldInstanceDeployment{{1U}, {3U}, 1U, true, 0}}},
+    {{kDummyMethodName0, LolaMethodInstanceDeployment{kDummyQueueSize0}}}};
+const LolaServiceTypeDeployment kLolaServiceTypeDeploymentWithFields{kLolaServiceId,
+                                                                     {},
+                                                                     {{kDummyFieldName, kDummyFieldId}},
+                                                                     {{kDummyMethodName0, kDummyMethodId0}}};
+
+const ConfigurationStore kConfigurationStoreWithFields{
+    InstanceSpecifier::Create(std::string{"my_field_instance_spec"}).value(),
+    make_ServiceIdentifierType("foo"),
+    QualityType::kASIL_B,
+    kLolaServiceTypeDeploymentWithFields,
+    kLolaServiceInstanceDeploymentWithFields};
+
 const std::optional<DataTypeSizeInfo> kEmptyInArgsTypeErasedDataInfo{};
 const std::optional<DataTypeSizeInfo> kEmptyReturnTypeTypeErasedDataInfo{};
 const DataTypeSizeInfo kValidInArgsTypeErasedDataInfo{16U, 16U};
@@ -186,6 +207,19 @@ class ProxyMethodHandlingFixture : public ProxyMockedMemoryFixture
         {
             const ProxyMethodInstanceIdentifier proxy_method_instance_identifier{proxy_->GetProxyInstanceIdentifier(),
                                                                                  {method_id, MethodType::kMethod}};
+            proxy_method_storage_.emplace_back(*proxy_, proxy_method_instance_identifier, type_erased_element_info);
+        }
+        return *this;
+    }
+
+    ProxyMethodHandlingFixture& WithRegisteredProxyMethodsWithType(
+        std::vector<std::tuple<LolaServiceElementId, MethodType, TypeErasedCallQueue::TypeErasedElementInfo>>
+            methods_to_register)
+    {
+        for (auto& [method_id, method_type, type_erased_element_info] : methods_to_register)
+        {
+            const ProxyMethodInstanceIdentifier proxy_method_instance_identifier{proxy_->GetProxyInstanceIdentifier(),
+                                                                                 {method_id, method_type}};
             proxy_method_storage_.emplace_back(*proxy_, proxy_method_instance_identifier, type_erased_element_info);
         }
         return *this;
@@ -915,6 +949,83 @@ TEST_F(ProxyMethodHandlingFixture, EnablingMethodThatDoesNotContainQueueSizeInCo
     // When calling SetupMethods with a ProxyMethod name which corresponds to the
     // registered ProxyMethod Then the program terminates
     SCORE_LANGUAGE_FUTURECPP_EXPECT_CONTRACT_VIOLATED(score::cpp::ignore = proxy_->SetupMethods({kDummyMethodName0}));
+}
+
+class ProxyFieldMethodHandlingFixture : public ProxyMethodHandlingFixture
+{
+  public:
+    const ServiceHandleContainer<HandleType> kFieldServiceHandleContainer{
+        make_HandleType(kConfigurationStoreWithFields.GetInstanceIdentifier())};
+
+    ProxyFieldMethodHandlingFixture& GivenAProxyWithFields()
+    {
+        // Override find service handler to return the field-aware handle container
+        EXPECT_CALL(service_discovery_mock_, StartFindService(_, Matcher<EnrichedInstanceIdentifier>(_)))
+            .WillRepeatedly(WithArg<0>(Invoke([this](auto find_service_handler) noexcept {
+                find_service_handler_ = std::move(find_service_handler);
+                return kFindServiceHandle;
+            })));
+
+        InitialiseProxyWithConstructor(kConfigurationStoreWithFields.GetInstanceIdentifier());
+        SCORE_LANGUAGE_FUTURECPP_ASSERT(proxy_ != nullptr);
+        return *this;
+    }
+};
+
+TEST_F(ProxyFieldMethodHandlingFixture, SetupMethodsIncludesFieldGetMethodWhenRegistered)
+{
+    // Given a proxy with a field deployment and a registered Get ProxyMethod
+    GivenAProxyWithFields().GivenAMockedSharedMemoryResource().WithRegisteredProxyMethodsWithType(
+        {{kDummyFieldId, MethodType::kGet, kEmptyTypeErasedInfo}});
+
+    // When calling SetupMethods with an empty enabled methods list (no regular methods)
+    EXPECT_CALL(shared_memory_factory_mock_guard_.mock_, Create(_, _, _, _, _)).Times(1);
+    const auto result = proxy_->SetupMethods({});
+
+    // Then SetupMethods succeeds because the field Get method was added
+    EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(ProxyFieldMethodHandlingFixture, SetupMethodsIncludesFieldSetMethodWhenRegistered)
+{
+    // Given a proxy with a field deployment and a registered Set ProxyMethod
+    GivenAProxyWithFields().GivenAMockedSharedMemoryResource().WithRegisteredProxyMethodsWithType(
+        {{kDummyFieldId, MethodType::kSet, kEmptyTypeErasedInfo}});
+
+    // When calling SetupMethods with an empty enabled methods list
+    EXPECT_CALL(shared_memory_factory_mock_guard_.mock_, Create(_, _, _, _, _)).Times(1);
+    const auto result = proxy_->SetupMethods({});
+
+    // Then SetupMethods succeeds because the field Set method was added
+    EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(ProxyFieldMethodHandlingFixture, SetupMethodsIncludesBothFieldGetAndSetMethods)
+{
+    // Given a proxy with a field deployment and registered Get and Set ProxyMethods
+    GivenAProxyWithFields().GivenAMockedSharedMemoryResource().WithRegisteredProxyMethodsWithType(
+        {{kDummyFieldId, MethodType::kGet, kEmptyTypeErasedInfo},
+         {kDummyFieldId, MethodType::kSet, kEmptyTypeErasedInfo}});
+
+    // When calling SetupMethods with an empty enabled methods list
+    EXPECT_CALL(shared_memory_factory_mock_guard_.mock_, Create(_, _, _, _, _)).Times(1);
+    const auto result = proxy_->SetupMethods({});
+
+    // Then SetupMethods succeeds because both field methods were added
+    EXPECT_TRUE(result.has_value());
+}
+
+TEST_F(ProxyFieldMethodHandlingFixture, SetupMethodsDoesNotCreateShmWhenNoFieldMethodsRegistered)
+{
+    // Given a proxy with a field deployment but NO registered Get/Set ProxyMethods
+    GivenAProxyWithFields().GivenAMockedSharedMemoryResource();
+
+    // When calling SetupMethods with an empty enabled methods list
+    EXPECT_CALL(shared_memory_factory_mock_guard_.mock_, Create(_, _, _, _, _)).Times(0);
+    const auto result = proxy_->SetupMethods({});
+
+    // Then SetupMethods returns success without creating shared memory
+    EXPECT_TRUE(result.has_value());
 }
 
 }  // namespace
