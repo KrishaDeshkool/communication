@@ -171,23 +171,27 @@ struct has_get_new_samples : std::false_type
 {
 };
 template <typename T>
-struct has_get_new_samples<
+struct has_get_new_samples<T,
+                           std::void_t<decltype(std::declval<T&>().GetNewSamples(std::declval<DummySampleReceiver>(),
+                                                                                 std::declval<std::size_t>()))>>
+    : std::true_type
+{
+};
+
+template <typename, typename = void>
+struct has_inject_mock : std::false_type
+{
+};
+template <typename T>
+struct has_inject_mock<
     T,
-    std::void_t<decltype(std::declval<T&>().GetNewSamples(std::declval<DummySampleReceiver>(), std::declval<std::size_t>()))>>
+    std::void_t<decltype(std::declval<T&>().InjectMock(std::declval<IProxyEvent<typename T::FieldType>&>()))>>
     : std::true_type
 {
 };
 
 TEST(ProxyFieldNotifierGatingTest, NotifierSurfaceExistsWhenWithNotifierTagIsPresent)
 {
-    RecordProperty("Description",
-                   "When the WithNotifier tag is present on a ProxyField, the consumer-side notifier surface "
-                   "(Subscribe, Unsubscribe, GetSubscriptionState, GetFreeSampleCount, GetNumNewSamplesAvailable, "
-                   "SetReceiveHandler, UnsetReceiveHandler, GetNewSamples) is callable on the field.");
-    RecordProperty("TestType", "Requirements-based test");
-    RecordProperty("Priority", "1");
-    RecordProperty("DerivationTechnique", "Analysis of requirements");
-
     using NotifierField = ProxyField<TestSampleType, WithNotifier>;
     static_assert(has_subscribe<NotifierField>::value);
     static_assert(has_unsubscribe<NotifierField>::value);
@@ -197,17 +201,11 @@ TEST(ProxyFieldNotifierGatingTest, NotifierSurfaceExistsWhenWithNotifierTagIsPre
     static_assert(has_set_receive_handler<NotifierField>::value);
     static_assert(has_unset_receive_handler<NotifierField>::value);
     static_assert(has_get_new_samples<NotifierField>::value);
+    static_assert(has_inject_mock<NotifierField>::value);
 }
 
 TEST(ProxyFieldNotifierGatingTest, NotifierSurfaceIsAbsentWhenWithNotifierTagIsMissing)
 {
-    RecordProperty("Description",
-                   "When the WithNotifier tag is absent from a ProxyField, the consumer-side notifier surface is "
-                   "removed from the public API. Using any of those methods at a call site fails to compile.");
-    RecordProperty("TestType", "Requirements-based test");
-    RecordProperty("Priority", "1");
-    RecordProperty("DerivationTechnique", "Analysis of requirements");
-
     using GetterOnlyField = ProxyField<TestSampleType, WithGetter>;
     static_assert(!has_subscribe<GetterOnlyField>::value);
     static_assert(!has_unsubscribe<GetterOnlyField>::value);
@@ -217,6 +215,7 @@ TEST(ProxyFieldNotifierGatingTest, NotifierSurfaceIsAbsentWhenWithNotifierTagIsM
     static_assert(!has_set_receive_handler<GetterOnlyField>::value);
     static_assert(!has_unset_receive_handler<GetterOnlyField>::value);
     static_assert(!has_get_new_samples<GetterOnlyField>::value);
+    static_assert(!has_inject_mock<GetterOnlyField>::value);
 }
 
 }  // namespace

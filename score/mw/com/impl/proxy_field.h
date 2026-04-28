@@ -69,6 +69,9 @@ class ProxyField final : public ProxyFieldBase
 
     /// Testing ctor: bindings are passed in directly (used with mock bindings).
     /// Method bindings default to nullptr; passing nullptr means the corresponding ProxyMethod is not built.
+    /// Only enabled when WithNotifier is in the tag pack — without it, there is no event dispatch to inject into.
+    template <typename U = SampleDataType,
+              typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
     ProxyField(ProxyBase& proxy_base,
                const std::string_view field_name,
                std::unique_ptr<ProxyEventBinding<FieldType>> event_binding,
@@ -103,11 +106,7 @@ class ProxyField final : public ProxyFieldBase
     ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithGetter = {}, WithSetter = {})
         : ProxyField{proxy_base,
                      field_name,
-                     std::make_unique<ProxyEvent<FieldType>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateEventBinding(proxy_base, field_name),
-                         typename ProxyEvent<FieldType>::FieldOnlyConstructorEnabler{}),
+                     MakeEventDispatchFromFactory(proxy_base, field_name),
                      std::make_unique<ProxyMethod<FieldType()>>(
                          proxy_base,
                          field_name,
@@ -128,11 +127,7 @@ class ProxyField final : public ProxyFieldBase
     ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithGetter = {})
         : ProxyField{proxy_base,
                      field_name,
-                     std::make_unique<ProxyEvent<FieldType>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateEventBinding(proxy_base, field_name),
-                         typename ProxyEvent<FieldType>::FieldOnlyConstructorEnabler{}),
+                     MakeEventDispatchFromFactory(proxy_base, field_name),
                      std::make_unique<ProxyMethod<FieldType()>>(
                          proxy_base,
                          field_name,
@@ -143,17 +138,14 @@ class ProxyField final : public ProxyFieldBase
     }
 
     /// \brief Normal ctor selected when the tag pack contains WithSetter but not WithGetter.
+    /// (Requires WithNotifier per the static_assert above, so the event dispatch is always built.)
     template <typename U = SampleDataType,
               typename = std::enable_if_t<!detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
                                           detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value>>
     ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithSetter = {})
         : ProxyField{proxy_base,
                      field_name,
-                     std::make_unique<ProxyEvent<FieldType>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateEventBinding(proxy_base, field_name),
-                         typename ProxyEvent<FieldType>::FieldOnlyConstructorEnabler{}),
+                     MakeEventDispatchFromFactory(proxy_base, field_name),
                      nullptr,
                      std::make_unique<ProxyMethod<FieldType(FieldType)>>(
                          proxy_base,
@@ -164,19 +156,12 @@ class ProxyField final : public ProxyFieldBase
     }
 
     /// \brief Normal ctor selected when the tag pack contains neither WithGetter nor WithSetter.
+    /// (Requires WithNotifier per the static_assert above, so the event dispatch is always built.)
     template <typename U = SampleDataType,
               typename = std::enable_if_t<!detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
                                           !detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value>>
     ProxyField(ProxyBase& proxy_base, const std::string_view field_name)
-        : ProxyField{proxy_base,
-                     field_name,
-                     std::make_unique<ProxyEvent<FieldType>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateEventBinding(proxy_base, field_name),
-                         typename ProxyEvent<FieldType>::FieldOnlyConstructorEnabler{}),
-                     nullptr,
-                     nullptr}
+        : ProxyField{proxy_base, field_name, MakeEventDispatchFromFactory(proxy_base, field_name), nullptr, nullptr}
     {
     }
 
@@ -274,14 +259,14 @@ class ProxyField final : public ProxyFieldBase
         return proxy_method_set_dispatch_->operator()(new_field_value);
     }
 
+    template <typename U = SampleDataType,
+              typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
     void InjectMock(IProxyEvent<FieldType>& proxy_event_mock)
     {
         proxy_event_dispatch_->InjectMock(proxy_event_mock);
     }
 
   private:
-<<<<<<< Updated upstream
-=======
     static constexpr bool kHasNotifier = detail::contains_type<WithNotifier, Tags...>::value;
 
     /// Builds the proxy event dispatch via the binding factory when WithNotifier is enabled. Returns nullptr
@@ -302,7 +287,6 @@ class ProxyField final : public ProxyFieldBase
         }
     }
 
->>>>>>> Stashed changes
     ProxyField(ProxyBase& proxy_base,
                const std::string_view field_name,
                std::unique_ptr<ProxyEvent<FieldType>> proxy_event_dispatch,
@@ -313,7 +297,10 @@ class ProxyField final : public ProxyFieldBase
           proxy_method_get_dispatch_{std::move(proxy_method_get_dispatch)},
           proxy_method_set_dispatch_{std::move(proxy_method_set_dispatch)}
     {
-        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(proxy_event_dispatch_ != nullptr);
+        if constexpr (kHasNotifier)
+        {
+            SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(proxy_event_dispatch_ != nullptr);
+        }
 
         ProxyBaseView proxy_base_view{proxy_base};
         proxy_base_view.RegisterField(field_name, *this);

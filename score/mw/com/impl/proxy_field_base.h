@@ -30,10 +30,12 @@ namespace score::mw::com::impl
 class ProxyFieldBase
 {
   public:
+    /// proxy_event_base_dispatch may be null for fields that have no WithNotifier tag — such fields don't
+    /// construct a ProxyEvent at all. The notifier methods below are unreachable in that case (they're hidden
+    /// by SFINAE-gated overrides on the derived ProxyField), so a null here is safe by construction.
     ProxyFieldBase(ProxyBase& proxy_base, std::string_view field_name, ProxyEventBase* proxy_event_base_dispatch)
         : proxy_base_{proxy_base}, proxy_event_base_dispatch_{proxy_event_base_dispatch}, field_name_{field_name}
     {
-        SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(proxy_event_base_dispatch != nullptr);
     }
 
     /// \brief A ProxyFieldBase shall not be copyable
