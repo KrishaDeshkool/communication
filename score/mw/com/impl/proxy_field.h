@@ -43,6 +43,25 @@ namespace score::mw::com::impl
 template <typename FieldType, typename... Tags>
 class ProxyFieldAttorney;
 
+template <typename SampleDataType, typename... Tags>
+class ProxyField;
+
+namespace detail
+{
+
+template <typename T>
+struct is_proxy_field : std::false_type
+{
+};
+template <typename FieldType, typename... Tags>
+struct is_proxy_field<ProxyField<FieldType, Tags...>> : std::true_type
+{
+};
+template <typename T>
+constexpr bool is_proxy_field_v = is_proxy_field<T>::value;
+
+}  // namespace detail
+
 /// \brief This is the user-visible class of a field that is part of a proxy. It delegates all functionality to
 /// ProxyEvent.
 ///
@@ -67,32 +86,33 @@ class ProxyField final : public ProxyFieldBase
   public:
     using FieldType = SampleDataType;
 
-    /// Testing ctor: bindings are passed in directly (used with mock bindings). The event binding is required
-    /// (no default) to disambiguate this overload from the production ctors when called as `{p, n}`. Pass an
-    /// explicit nullptr for non-notifier fields. Method bindings that are nullptr cause the corresponding
-    /// ProxyMethod to not be built (avoids triggering MarkServiceElementBindingInvalid()).
+    /// Testing ctor: bindings are passed in directly (used with mock bindings). Disambiguated from the production
+    /// ctors via the detail::WithTestTag marker — required as the 3rd argument. Bindings default to nullptr;
+    /// nullptr method bindings cause the corresponding ProxyMethod to not be built (avoids triggering
+    /// MarkServiceElementBindingInvalid()).
     ProxyField(ProxyBase& proxy_base,
                const std::string_view field_name,
-               std::unique_ptr<ProxyEventBinding<FieldType>> event_binding,
+               detail::WithTestTag,
+               std::unique_ptr<ProxyEventBinding<FieldType>> event_binding = nullptr,
                std::unique_ptr<ProxyMethodBinding> get_method_binding = nullptr,
                std::unique_ptr<ProxyMethodBinding> set_method_binding = nullptr)
-        : ProxyField{
-              proxy_base,
-              field_name,
-              std::make_unique<ProxyEvent<FieldType>>(proxy_base, field_name, std::move(event_binding)),
-              get_method_binding == nullptr ? nullptr
-                                            : std::make_unique<ProxyMethod<FieldType()>>(
-                                                  proxy_base,
-                                                  field_name,
-                                                  std::move(get_method_binding),
-                                                  typename ProxyMethod<FieldType()>::FieldOnlyConstructorEnabler{}),
-              set_method_binding == nullptr
-                  ? nullptr
-                  : std::make_unique<ProxyMethod<FieldType(FieldType)>>(
-                        proxy_base,
-                        field_name,
-                        std::move(set_method_binding),
-                        typename ProxyMethod<FieldType(FieldType)>::FieldOnlyConstructorEnabler{})}
+        : ProxyField{proxy_base,
+                     field_name,
+                     std::make_unique<ProxyEvent<FieldType>>(proxy_base, field_name, std::move(event_binding)),
+                     get_method_binding == nullptr
+                         ? nullptr
+                         : std::make_unique<ProxyMethod<FieldType()>>(
+                               proxy_base,
+                               field_name,
+                               std::move(get_method_binding),
+                               typename ProxyMethod<FieldType()>::FieldOnlyConstructorEnabler{}),
+                     set_method_binding == nullptr
+                         ? nullptr
+                         : std::make_unique<ProxyMethod<FieldType(FieldType)>>(
+                               proxy_base,
+                               field_name,
+                               std::move(set_method_binding),
+                               typename ProxyMethod<FieldType(FieldType)>::FieldOnlyConstructorEnabler{})}
     {
     }
 
@@ -311,9 +331,8 @@ class ProxyField final : public ProxyFieldBase
 
     /// Builds the Get-method dispatch via the binding factory when WithGetter is enabled. Returns nullptr
     /// without invoking the factory when WithGetter is disabled.
-    static std::unique_ptr<ProxyMethod<FieldType()>> MakeGetMethodDispatchFromFactory(
-        ProxyBase& proxy_base,
-        const std::string_view field_name)
+    static std::unique_ptr<ProxyMethod<FieldType()>> MakeGetMethodDispatchFromFactory(ProxyBase& proxy_base,
+                                                                                      const std::string_view field_name)
     {
         if constexpr (kHasGetter)
         {
