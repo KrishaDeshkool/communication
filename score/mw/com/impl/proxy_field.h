@@ -67,11 +67,10 @@ class ProxyField final : public ProxyFieldBase
   public:
     using FieldType = SampleDataType;
 
-    /// Testing ctor: bindings are passed in directly (used with mock bindings).
-    /// Method bindings default to nullptr; passing nullptr means the corresponding ProxyMethod is not built.
-    /// Only enabled when WithNotifier is in the tag pack — without it, there is no event dispatch to inject into.
-    template <typename U = SampleDataType,
-              typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
+    /// Testing ctor: bindings are passed in directly (used with mock bindings). The event binding is required
+    /// (no default) to disambiguate this overload from the production ctors when called as `{p, n}`. Pass an
+    /// explicit nullptr for non-notifier fields. Method bindings that are nullptr cause the corresponding
+    /// ProxyMethod to not be built (avoids triggering MarkServiceElementBindingInvalid()).
     ProxyField(ProxyBase& proxy_base,
                const std::string_view field_name,
                std::unique_ptr<ProxyEventBinding<FieldType>> event_binding,
@@ -81,8 +80,6 @@ class ProxyField final : public ProxyFieldBase
               proxy_base,
               field_name,
               std::make_unique<ProxyEvent<FieldType>>(proxy_base, field_name, std::move(event_binding)),
-              // If a binding is not provided, then we don't create the method. This ensures that the ProxyMethod
-              // doesn't report that the binding is invalid (via proxy_base_view.MarkServiceElementBindingInvalid())
               get_method_binding == nullptr ? nullptr
                                             : std::make_unique<ProxyMethod<FieldType()>>(
                                                   proxy_base,
@@ -99,69 +96,91 @@ class ProxyField final : public ProxyFieldBase
     {
     }
 
-    /// \brief Normal ctor selected when the tag pack contains both WithGetter and WithSetter.
+    /// \brief Production ctor for tag pack <WithGetter>.
     template <typename U = SampleDataType,
               typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
-                                          detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value>>
-    ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithGetter = {}, WithSetter = {})
-        : ProxyField{proxy_base,
-                     field_name,
-                     MakeEventDispatchFromFactory(proxy_base, field_name),
-                     std::make_unique<ProxyMethod<FieldType()>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateGetMethodBinding(proxy_base, field_name),
-                         typename ProxyMethod<FieldType()>::FieldOnlyConstructorEnabler{}),
-                     std::make_unique<ProxyMethod<FieldType(FieldType)>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateSetMethodBinding(proxy_base, field_name),
-                         typename ProxyMethod<FieldType(FieldType)>::FieldOnlyConstructorEnabler{})}
-    {
-    }
-
-    /// \brief Normal ctor selected when the tag pack contains WithGetter but not WithSetter.
-    template <typename U = SampleDataType,
-              typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
-                                          !detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value>>
+                                          !detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value &&
+                                          !detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
     ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithGetter = {})
         : ProxyField{proxy_base,
                      field_name,
                      MakeEventDispatchFromFactory(proxy_base, field_name),
-                     std::make_unique<ProxyMethod<FieldType()>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateGetMethodBinding(proxy_base, field_name),
-                         typename ProxyMethod<FieldType()>::FieldOnlyConstructorEnabler{}),
-                     nullptr}
+                     MakeGetMethodDispatchFromFactory(proxy_base, field_name),
+                     MakeSetMethodDispatchFromFactory(proxy_base, field_name)}
     {
     }
 
-    /// \brief Normal ctor selected when the tag pack contains WithSetter but not WithGetter.
-    /// (Requires WithNotifier per the static_assert above, so the event dispatch is always built.)
+    /// \brief Production ctor for tag pack <WithGetter, WithSetter>.
     template <typename U = SampleDataType,
-              typename = std::enable_if_t<!detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
-                                          detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value>>
-    ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithSetter = {})
+              typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
+                                          detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value &&
+                                          !detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
+    ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithGetter = {}, WithSetter = {})
         : ProxyField{proxy_base,
                      field_name,
                      MakeEventDispatchFromFactory(proxy_base, field_name),
-                     nullptr,
-                     std::make_unique<ProxyMethod<FieldType(FieldType)>>(
-                         proxy_base,
-                         field_name,
-                         ProxyFieldBindingFactory<FieldType>::CreateSetMethodBinding(proxy_base, field_name),
-                         typename ProxyMethod<FieldType(FieldType)>::FieldOnlyConstructorEnabler{})}
+                     MakeGetMethodDispatchFromFactory(proxy_base, field_name),
+                     MakeSetMethodDispatchFromFactory(proxy_base, field_name)}
     {
     }
 
-    /// \brief Normal ctor selected when the tag pack contains neither WithGetter nor WithSetter.
-    /// (Requires WithNotifier per the static_assert above, so the event dispatch is always built.)
+    /// \brief Production ctor for tag pack <WithGetter, WithNotifier>.
+    template <typename U = SampleDataType,
+              typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
+                                          !detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value &&
+                                          detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
+    ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithGetter = {}, WithNotifier = {})
+        : ProxyField{proxy_base,
+                     field_name,
+                     MakeEventDispatchFromFactory(proxy_base, field_name),
+                     MakeGetMethodDispatchFromFactory(proxy_base, field_name),
+                     MakeSetMethodDispatchFromFactory(proxy_base, field_name)}
+    {
+    }
+
+    /// \brief Production ctor for tag pack <WithGetter, WithSetter, WithNotifier>.
+    template <typename U = SampleDataType,
+              typename = std::enable_if_t<detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
+                                          detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value &&
+                                          detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
+    ProxyField(ProxyBase& proxy_base,
+               const std::string_view field_name,
+               WithGetter = {},
+               WithSetter = {},
+               WithNotifier = {})
+        : ProxyField{proxy_base,
+                     field_name,
+                     MakeEventDispatchFromFactory(proxy_base, field_name),
+                     MakeGetMethodDispatchFromFactory(proxy_base, field_name),
+                     MakeSetMethodDispatchFromFactory(proxy_base, field_name)}
+    {
+    }
+
+    /// \brief Production ctor for tag pack <WithSetter, WithNotifier>.
     template <typename U = SampleDataType,
               typename = std::enable_if_t<!detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
-                                          !detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value>>
-    ProxyField(ProxyBase& proxy_base, const std::string_view field_name)
-        : ProxyField{proxy_base, field_name, MakeEventDispatchFromFactory(proxy_base, field_name), nullptr, nullptr}
+                                          detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value &&
+                                          detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
+    ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithSetter = {}, WithNotifier = {})
+        : ProxyField{proxy_base,
+                     field_name,
+                     MakeEventDispatchFromFactory(proxy_base, field_name),
+                     MakeGetMethodDispatchFromFactory(proxy_base, field_name),
+                     MakeSetMethodDispatchFromFactory(proxy_base, field_name)}
+    {
+    }
+
+    /// \brief Production ctor for tag pack <WithNotifier>.
+    template <typename U = SampleDataType,
+              typename = std::enable_if_t<!detail::is_tag_enabled<U, SampleDataType, WithGetter, Tags...>::value &&
+                                          !detail::is_tag_enabled<U, SampleDataType, WithSetter, Tags...>::value &&
+                                          detail::is_tag_enabled<U, SampleDataType, WithNotifier, Tags...>::value>>
+    ProxyField(ProxyBase& proxy_base, const std::string_view field_name, WithNotifier = {})
+        : ProxyField{proxy_base,
+                     field_name,
+                     MakeEventDispatchFromFactory(proxy_base, field_name),
+                     MakeGetMethodDispatchFromFactory(proxy_base, field_name),
+                     MakeSetMethodDispatchFromFactory(proxy_base, field_name)}
     {
     }
 
@@ -267,9 +286,12 @@ class ProxyField final : public ProxyFieldBase
     }
 
   private:
+    static constexpr bool kHasGetter = detail::contains_type<WithGetter, Tags...>::value;
+    static constexpr bool kHasSetter = detail::contains_type<WithSetter, Tags...>::value;
     static constexpr bool kHasNotifier = detail::contains_type<WithNotifier, Tags...>::value;
 
     /// Builds the proxy event dispatch via the binding factory when WithNotifier is enabled. Returns nullptr
+    /// without invoking the factory when WithNotifier is disabled.
     static std::unique_ptr<ProxyEvent<FieldType>> MakeEventDispatchFromFactory(ProxyBase& proxy_base,
                                                                                const std::string_view field_name)
     {
@@ -280,6 +302,46 @@ class ProxyField final : public ProxyFieldBase
                 field_name,
                 ProxyFieldBindingFactory<FieldType>::CreateEventBinding(proxy_base, field_name),
                 typename ProxyEvent<FieldType>::FieldOnlyConstructorEnabler{});
+        }
+        else
+        {
+            return nullptr;
+        }
+    }
+
+    /// Builds the Get-method dispatch via the binding factory when WithGetter is enabled. Returns nullptr
+    /// without invoking the factory when WithGetter is disabled.
+    static std::unique_ptr<ProxyMethod<FieldType()>> MakeGetMethodDispatchFromFactory(
+        ProxyBase& proxy_base,
+        const std::string_view field_name)
+    {
+        if constexpr (kHasGetter)
+        {
+            return std::make_unique<ProxyMethod<FieldType()>>(
+                proxy_base,
+                field_name,
+                ProxyFieldBindingFactory<FieldType>::CreateGetMethodBinding(proxy_base, field_name),
+                typename ProxyMethod<FieldType()>::FieldOnlyConstructorEnabler{});
+        }
+        else
+        {
+            return nullptr;
+        }
+    }
+
+    /// Builds the Set-method dispatch via the binding factory when WithSetter is enabled. Returns nullptr
+    /// without invoking the factory when WithSetter is disabled.
+    static std::unique_ptr<ProxyMethod<FieldType(FieldType)>> MakeSetMethodDispatchFromFactory(
+        ProxyBase& proxy_base,
+        const std::string_view field_name)
+    {
+        if constexpr (kHasSetter)
+        {
+            return std::make_unique<ProxyMethod<FieldType(FieldType)>>(
+                proxy_base,
+                field_name,
+                ProxyFieldBindingFactory<FieldType>::CreateSetMethodBinding(proxy_base, field_name),
+                typename ProxyMethod<FieldType(FieldType)>::FieldOnlyConstructorEnabler{});
         }
         else
         {
