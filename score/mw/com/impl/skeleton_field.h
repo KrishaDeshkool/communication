@@ -13,7 +13,9 @@
 #ifndef SCORE_MW_COM_IMPL_SKELETON_FIELD_H
 #define SCORE_MW_COM_IMPL_SKELETON_FIELD_H
 
+#include "score/mw/com/impl/configuration/lola_service_instance_deployment.h"
 #include "score/mw/com/impl/field_tags.h"
+#include "score/mw/com/impl/instance_identifier.h"
 #include "score/mw/com/impl/method_type.h"
 #include "score/mw/com/impl/methods/skeleton_method.h"
 #include "score/mw/com/impl/plumbing/sample_allocatee_ptr.h"
@@ -29,10 +31,13 @@
 #include <score/assert.hpp>
 #include <score/callback.hpp>
 
+#include <cstdint>
 #include <memory>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 namespace score::mw::com::impl
 {
@@ -169,9 +174,60 @@ class SkeletonField : public SkeletonFieldBase
         return true;
     }
 
+    static constexpr bool kHasNotifier = detail::contains_type<WithNotifier, Tags...>::value;
+
+    /// Default sample-slot count used when WithNotifier is disabled. Two slots cover serialised GET/SET concurrency
+    /// (LoLa skeleton creates a temporary SamplePtr during a copy step).
+    static constexpr std::uint16_t kDefaultSlotCountWithoutNotifier = 2U;
+
+    /// When WithNotifier is disabled, normalise the field's slot-count config:
+    ///   - configured slot count → log warning and force to kDefaultSlotCountWithoutNotifier
+    ///   - missing slot count    → silently set to kDefaultSlotCountWithoutNotifier
+    /// When WithNotifier is enabled this is a no-op; the existing factory path retains the "terminate on missing
+    /// slot count" behaviour. Quietly returns if the deployment doesn't contain a LoLa binding or the field's
+    /// entry — those cases are handled (or terminated) by the binding factory itself.
+    static void NormaliseSlotCountForField(SkeletonBase& parent, const std::string_view field_name)
+    {
+        if constexpr (!kHasNotifier)
+        {
+            const auto identifier = SkeletonBaseView{parent}.GetAssociatedInstanceIdentifier();
+            const InstanceIdentifierView identifier_view{identifier};
+            const auto& service_instance_deployment = identifier_view.GetServiceInstanceDeployment();
+            if (!std::holds_alternative<LolaServiceInstanceDeployment>(service_instance_deployment.bindingInfo_))
+            {
+                return;
+            }
+            const auto& lola_service_instance_deployment =
+                GetServiceInstanceDeploymentBinding<LolaServiceInstanceDeployment>(service_instance_deployment);
+            const std::string field_name_str{field_name};
+            const auto field_iter = lola_service_instance_deployment.fields_.find(field_name_str);
+            if (field_iter == lola_service_instance_deployment.fields_.cend())
+            {
+                // Field entry isn't configured (e.g. test fixtures that mock the binding factory). Let the factory
+                // handle it; we have nothing to normalise.
+                return;
+            }
+
+            // Mutating shared startup-time config. Safe here: this runs before any concurrent access to the
+            // deployment, and the mutation is idempotent (re-running yields the same kDefaultSlotCountWithoutNotifier).
+            // coverity[autosar_cpp14_a5_2_3_violation]
+            auto& mutable_field_deployment = const_cast<LolaFieldInstanceDeployment&>(field_iter->second);
+
+            if (mutable_field_deployment.GetNumberOfSampleSlots().has_value())
+            {
+                score::mw::log::LogWarn("lola")
+                    << "Field '" << field_name
+                    << "' has WithNotifier disabled; ignoring configured numberOfSampleSlots and using internal "
+                    << "default of " << kDefaultSlotCountWithoutNotifier << ".";
+            }
+            mutable_field_deployment.SetNumberOfSampleSlots(kDefaultSlotCountWithoutNotifier);
+        }
+    }
+
     static std::unique_ptr<SkeletonEvent<FieldType>> MakeSkeletonEvent(SkeletonBase& parent,
                                                                        const std::string_view field_name)
     {
+        NormaliseSlotCountForField(parent, field_name);
         return std::make_unique<SkeletonEvent<FieldType>>(
             parent,
             field_name,

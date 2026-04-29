@@ -1558,5 +1558,121 @@ TEST(SkeletonFieldSetHandlerTest, SecondRegisterSetHandlerReplacesHandler)
     EXPECT_TRUE(second_callback_called);
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// SkeletonField slot-count normalisation when WithNotifier is enabled / disabled.
+//
+// Behaviour matrix:
+//   WithNotifier  | slot count in config | outcome
+//   ------------- | -------------------- | --------------------------------------------------
+//   enabled       | configured           | no change (existing behaviour)
+//   enabled       | missing              | factory terminates (existing behaviour)
+//   disabled      | configured           | log warning, force to 2 (kDefaultSlotCountWithoutNotifier)
+//   disabled      | missing              | silently set to 2
+
+class MyNotifierSkeleton : public SkeletonBase
+{
+  public:
+    using SkeletonBase::SkeletonBase;
+    SkeletonField<TestSampleType, WithGetter, WithNotifier> field_{*this, kFieldName};
+};
+
+class MyGetterOnlySkeleton : public SkeletonBase
+{
+  public:
+    using SkeletonBase::SkeletonBase;
+    SkeletonField<TestSampleType, WithGetter> field_{*this, kFieldName};
+};
+
+namespace
+{
+
+InstanceIdentifier MakeInstanceIdentifierWithFieldSlotCount(std::optional<std::uint16_t> slot_count)
+{
+    LolaFieldInstanceDeployment field_deployment{slot_count,
+                                                 std::optional<LolaFieldInstanceDeployment::SubscriberCountType>{1U},
+                                                 std::optional<std::uint8_t>{},
+                                                 false,
+                                                 LolaFieldInstanceDeployment::TracingSlotSizeType{0U}};
+    LolaServiceInstanceDeployment lola_deployment{LolaServiceInstanceId{kInstanceId}};
+    lola_deployment.fields_.emplace(std::string{kFieldName}, field_deployment);
+    static std::vector<ServiceInstanceDeployment> kept_deployments;
+    kept_deployments.push_back(ServiceInstanceDeployment{
+        kServiceIdentifier, std::move(lola_deployment), QualityType::kASIL_QM, kInstanceSpecifier});
+    return make_InstanceIdentifier(kept_deployments.back(), kTypeDeployment);
+}
+
+std::optional<std::uint16_t> GetFieldSlotCount(const InstanceIdentifier& identifier)
+{
+    const InstanceIdentifierView identifier_view{identifier};
+    const auto& service_instance_deployment = identifier_view.GetServiceInstanceDeployment();
+    const auto& lola_deployment =
+        GetServiceInstanceDeploymentBinding<LolaServiceInstanceDeployment>(service_instance_deployment);
+    const auto field_iter = lola_deployment.fields_.find(std::string{kFieldName});
+    SCORE_LANGUAGE_FUTURECPP_ASSERT_PRD(field_iter != lola_deployment.fields_.cend());
+    return field_iter->second.GetNumberOfSampleSlots();
+}
+
+}  // namespace
+
+TEST(SkeletonFieldSlotCountTest, NotifierEnabledWithConfiguredSlotCountIsLeftUnchanged)
+{
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+
+    const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::uint16_t{5U});
+
+    MyNotifierSkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
+
+    EXPECT_EQ(GetFieldSlotCount(identifier), std::uint16_t{5U});
+}
+
+TEST(SkeletonFieldSlotCountTest, NotifierEnabledWithMissingSlotCountIsLeftUnchanged)
+{
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+
+    const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::nullopt);
+
+    MyNotifierSkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
+
+    EXPECT_FALSE(GetFieldSlotCount(identifier).has_value());
+}
+
+TEST(SkeletonFieldSlotCountTest, NotifierDisabledWithConfiguredSlotCountIsForcedToDefault)
+{
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+
+    const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::uint16_t{5U});
+
+    MyGetterOnlySkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
+
+    EXPECT_EQ(GetFieldSlotCount(identifier), std::uint16_t{2U});
+}
+
+TEST(SkeletonFieldSlotCountTest, NotifierDisabledWithMissingSlotCountIsSetToDefault)
+{
+    RuntimeMockGuard runtime_mock_guard{};
+    ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
+    SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+    EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
+        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+
+    const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::nullopt);
+
+    MyGetterOnlySkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
+
+    EXPECT_EQ(GetFieldSlotCount(identifier), std::uint16_t{2U});
+}
+
 }  // namespace
 }  // namespace score::mw::com::impl
