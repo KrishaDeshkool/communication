@@ -180,60 +180,57 @@ class SkeletonField : public SkeletonFieldBase
     /// (LoLa skeleton creates a temporary SamplePtr during a copy step).
     static constexpr std::uint16_t kDefaultSlotCountWithoutNotifier = 2U;
 
-    /// When WithNotifier is disabled, normalise the field's slot-count config:
-    ///   - configured slot count → log warning and force to kDefaultSlotCountWithoutNotifier
-    ///   - missing slot count    → silently set to kDefaultSlotCountWithoutNotifier
-    /// When WithNotifier is enabled this is a no-op; the existing factory path retains the "terminate on missing
-    /// slot count" behaviour. Quietly returns if the deployment doesn't contain a LoLa binding or the field's
-    /// entry — those cases are handled (or terminated) by the binding factory itself.
-    static void NormaliseSlotCountForField(SkeletonBase& parent, const std::string_view field_name)
+    /// When WithNotifier is disabled and the field's deployment carries a configured numberOfSampleSlots, log a
+    /// warning that we're going to ignore it. Read-only — never mutates the deployment. Quietly skips for non-LoLa
+    /// bindings or when the field entry isn't in the deployment (test fixtures with a mocked binding factory).
+    static void WarnIfConfiguredSlotCountIgnored(SkeletonBase& parent, const std::string_view field_name)
     {
-        if constexpr (!kHasNotifier)
+        const auto identifier = SkeletonBaseView{parent}.GetAssociatedInstanceIdentifier();
+        const InstanceIdentifierView identifier_view{identifier};
+        const auto& service_instance_deployment = identifier_view.GetServiceInstanceDeployment();
+        if (!std::holds_alternative<LolaServiceInstanceDeployment>(service_instance_deployment.bindingInfo_))
         {
-            const auto identifier = SkeletonBaseView{parent}.GetAssociatedInstanceIdentifier();
-            const InstanceIdentifierView identifier_view{identifier};
-            const auto& service_instance_deployment = identifier_view.GetServiceInstanceDeployment();
-            if (!std::holds_alternative<LolaServiceInstanceDeployment>(service_instance_deployment.bindingInfo_))
-            {
-                return;
-            }
-            const auto& lola_service_instance_deployment =
-                GetServiceInstanceDeploymentBinding<LolaServiceInstanceDeployment>(service_instance_deployment);
-            const std::string field_name_str{field_name};
-            const auto field_iter = lola_service_instance_deployment.fields_.find(field_name_str);
-            if (field_iter == lola_service_instance_deployment.fields_.cend())
-            {
-                // Field entry isn't configured (e.g. test fixtures that mock the binding factory). Let the factory
-                // handle it; we have nothing to normalise.
-                return;
-            }
-
-            // Mutating shared startup-time config. Safe here: this runs before any concurrent access to the
-            // deployment, and the mutation is idempotent (re-running yields the same kDefaultSlotCountWithoutNotifier).
-            // coverity[autosar_cpp14_a5_2_3_violation]
-            auto& mutable_field_deployment = const_cast<LolaFieldInstanceDeployment&>(field_iter->second);
-
-            if (mutable_field_deployment.GetNumberOfSampleSlots().has_value())
-            {
-                score::mw::log::LogWarn("lola")
-                    << "Field '" << field_name
-                    << "' has WithNotifier disabled; ignoring configured numberOfSampleSlots and using internal "
-                    << "default of " << kDefaultSlotCountWithoutNotifier << ".";
-            }
-            mutable_field_deployment.SetNumberOfSampleSlots(kDefaultSlotCountWithoutNotifier);
+            return;
+        }
+        const auto& lola_service_instance_deployment =
+            GetServiceInstanceDeploymentBinding<LolaServiceInstanceDeployment>(service_instance_deployment);
+        const auto field_iter = lola_service_instance_deployment.fields_.find(std::string{field_name});
+        if (field_iter == lola_service_instance_deployment.fields_.cend())
+        {
+            return;
+        }
+        if (field_iter->second.GetNumberOfSampleSlots().has_value())
+        {
+            score::mw::log::LogWarn("lola")
+                << "Field '" << field_name
+                << "' has WithNotifier disabled; ignoring configured numberOfSampleSlots and using internal "
+                << "default of " << kDefaultSlotCountWithoutNotifier << ".";
         }
     }
 
     static std::unique_ptr<SkeletonEvent<FieldType>> MakeSkeletonEvent(SkeletonBase& parent,
                                                                        const std::string_view field_name)
     {
-        NormaliseSlotCountForField(parent, field_name);
-        return std::make_unique<SkeletonEvent<FieldType>>(
+        // Slot-count sidechannel: when WithNotifier is disabled, set a per-skeleton override on the parent that
+        // the binding factory consults instead of the (possibly missing) deployment value. Cleared after the
+        // factory call so it can't leak into a sibling field's construction. Field ctors run sequentially during
+        // SkeletonBase construction, so a single slot on the parent is sufficient.
+        if constexpr (!kHasNotifier)
+        {
+            WarnIfConfiguredSlotCountIgnored(parent, field_name);
+            SkeletonBaseView{parent}.SetSlotCountOverride(kDefaultSlotCountWithoutNotifier);
+        }
+        auto skeleton_event = std::make_unique<SkeletonEvent<FieldType>>(
             parent,
             field_name,
             SkeletonFieldBindingFactory<SampleDataType>::CreateEventBinding(
                 SkeletonBaseView{parent}.GetAssociatedInstanceIdentifier(), parent, field_name),
             typename SkeletonEvent<FieldType>::FieldOnlyConstructorEnabler{});
+        if constexpr (!kHasNotifier)
+        {
+            SkeletonBaseView{parent}.SetSlotCountOverride(std::nullopt);
+        }
+        return skeleton_event;
     }
 
     /// \brief Private delegating constructor used by the setter-enabled public ctor.

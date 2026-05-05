@@ -33,6 +33,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <optional>
 #include <string_view>
 
 namespace score::mw::com::impl
@@ -108,6 +109,12 @@ class SkeletonBase
 
     ISkeletonBase* skeleton_mock_;
 
+    /// Sidechannel slot used by the field-construction path: a SkeletonField sets this immediately before
+    /// invoking the binding factory and clears it immediately after, so the factory can consult it instead of
+    /// the (read-only) deployment when the field's tag pack disables the notifier surface. Field ctors run
+    /// sequentially during SkeletonBase construction, so a single slot is sufficient — there's no overlap.
+    std::optional<std::uint16_t> current_slot_count_override_{std::nullopt};
+
     [[nodiscard]] score::Result<void> OfferServiceEvents() const noexcept;
     [[nodiscard]] score::Result<void> OfferServiceFields() const noexcept;
 
@@ -127,6 +134,17 @@ class SkeletonBaseView
     SkeletonBinding* GetBinding() const
     {
         return skeleton_base_.binding_.get();
+    }
+
+    /// Set/clear/read the per-skeleton slot-count override used by the field-construction sidechannel.
+    /// See `SkeletonBase::current_slot_count_override_` for the contract.
+    void SetSlotCountOverride(std::optional<std::uint16_t> slot_count) noexcept
+    {
+        skeleton_base_.current_slot_count_override_ = slot_count;
+    }
+    std::optional<std::uint16_t> GetSlotCountOverride() const noexcept
+    {
+        return skeleton_base_.current_slot_count_override_;
     }
 
     void RegisterEvent(const std::string_view event_name, SkeletonEventBase& event)

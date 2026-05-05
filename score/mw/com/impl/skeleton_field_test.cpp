@@ -24,7 +24,10 @@
 #include <gmock/gmock.h>
 #include <gtest/gtest.h>
 #include <cstdint>
+#include <list>
 #include <memory>
+#include <optional>
+#include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -1595,9 +1598,12 @@ InstanceIdentifier MakeInstanceIdentifierWithFieldSlotCount(std::optional<std::u
                                                  LolaFieldInstanceDeployment::TracingSlotSizeType{0U}};
     LolaServiceInstanceDeployment lola_deployment{LolaServiceInstanceId{kInstanceId}};
     lola_deployment.fields_.emplace(std::string{kFieldName}, field_deployment);
-    static std::vector<ServiceInstanceDeployment> kept_deployments;
-    kept_deployments.push_back(ServiceInstanceDeployment{
-        kServiceIdentifier, std::move(lola_deployment), QualityType::kASIL_QM, kInstanceSpecifier});
+    // std::list is used (not std::vector) because the constructed InstanceIdentifier holds a pointer back into
+    // the ServiceInstanceDeployment we push here. List preserves references when more elements are added; vector
+    // does not (reallocation invalidates prior references).
+    static std::list<ServiceInstanceDeployment> kept_deployments;
+    kept_deployments.emplace_back(
+        kServiceIdentifier, std::move(lola_deployment), QualityType::kASIL_QM, kInstanceSpecifier);
     return make_InstanceIdentifier(kept_deployments.back(), kTypeDeployment);
 }
 
@@ -1614,64 +1620,97 @@ std::optional<std::uint16_t> GetFieldSlotCount(const InstanceIdentifier& identif
 
 }  // namespace
 
-TEST(SkeletonFieldSlotCountTest, NotifierEnabledWithConfiguredSlotCountIsLeftUnchanged)
+// The sidechannel: SkeletonField writes the override on the parent SkeletonBase before invoking the binding
+// factory and clears it after. These tests use a lambda on the mocked CreateEventBinding to capture the override
+// at the moment the factory sees it, then assert (a) the captured value matches the expected behaviour for the
+// (notifier-tag, configured-slot-count) cell, and (b) the override is cleared again once construction returns.
+TEST(SkeletonFieldSlotCountTest, NotifierEnabledWithConfiguredSlotCountLeavesOverrideUnset)
 {
     RuntimeMockGuard runtime_mock_guard{};
     ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
     SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    std::optional<std::uint16_t> override_at_factory_call{};
     EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
-        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+        .WillOnce(Invoke([&](const InstanceIdentifier&, SkeletonBase& parent, const std::string_view) {
+            override_at_factory_call = SkeletonBaseView{parent}.GetSlotCountOverride();
+            return std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>();
+        }));
 
     const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::uint16_t{5U});
 
     MyNotifierSkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
 
+    EXPECT_FALSE(override_at_factory_call.has_value());
+    EXPECT_FALSE(SkeletonBaseView{skeleton}.GetSlotCountOverride().has_value());
     EXPECT_EQ(GetFieldSlotCount(identifier), std::uint16_t{5U});
 }
 
-TEST(SkeletonFieldSlotCountTest, NotifierEnabledWithMissingSlotCountIsLeftUnchanged)
+TEST(SkeletonFieldSlotCountTest, NotifierEnabledWithMissingSlotCountLeavesOverrideUnset)
 {
     RuntimeMockGuard runtime_mock_guard{};
     ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
     SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    std::optional<std::uint16_t> override_at_factory_call{};
     EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
-        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+        .WillOnce(Invoke([&](const InstanceIdentifier&, SkeletonBase& parent, const std::string_view) {
+            override_at_factory_call = SkeletonBaseView{parent}.GetSlotCountOverride();
+            return std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>();
+        }));
 
     const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::nullopt);
 
     MyNotifierSkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
 
+    EXPECT_FALSE(override_at_factory_call.has_value());
+    EXPECT_FALSE(SkeletonBaseView{skeleton}.GetSlotCountOverride().has_value());
     EXPECT_FALSE(GetFieldSlotCount(identifier).has_value());
 }
 
-TEST(SkeletonFieldSlotCountTest, NotifierDisabledWithConfiguredSlotCountIsForcedToDefault)
+TEST(SkeletonFieldSlotCountTest, NotifierDisabledWithConfiguredSlotCountSetsOverrideToDefault)
 {
     RuntimeMockGuard runtime_mock_guard{};
     ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
     SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    std::optional<std::uint16_t> override_at_factory_call{};
     EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
-        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+        .WillOnce(Invoke([&](const InstanceIdentifier&, SkeletonBase& parent, const std::string_view) {
+            override_at_factory_call = SkeletonBaseView{parent}.GetSlotCountOverride();
+            return std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>();
+        }));
 
     const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::uint16_t{5U});
 
     MyGetterOnlySkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
 
-    EXPECT_EQ(GetFieldSlotCount(identifier), std::uint16_t{2U});
+    EXPECT_EQ(override_at_factory_call, std::uint16_t{2U});
+    EXPECT_FALSE(SkeletonBaseView{skeleton}.GetSlotCountOverride().has_value());
+    // Deployment itself is not mutated by the sidechannel — only the per-skeleton override slot is touched.
+    EXPECT_EQ(GetFieldSlotCount(identifier), std::uint16_t{5U});
 }
 
-TEST(SkeletonFieldSlotCountTest, NotifierDisabledWithMissingSlotCountIsSetToDefault)
+TEST(SkeletonFieldSlotCountTest, NotifierDisabledWithMissingSlotCountSetsOverrideToDefault)
 {
     RuntimeMockGuard runtime_mock_guard{};
     ON_CALL(runtime_mock_guard.runtime_mock_, GetTracingFilterConfig()).WillByDefault(Return(nullptr));
     SkeletonFieldBindingFactoryMockGuard<TestSampleType> skeleton_field_binding_factory_mock_guard{};
+
+    std::optional<std::uint16_t> override_at_factory_call{};
     EXPECT_CALL(skeleton_field_binding_factory_mock_guard.factory_mock_, CreateEventBinding(_, _, kFieldName))
-        .WillOnce(Return(ByMove(std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>())));
+        .WillOnce(Invoke([&](const InstanceIdentifier&, SkeletonBase& parent, const std::string_view) {
+            override_at_factory_call = SkeletonBaseView{parent}.GetSlotCountOverride();
+            return std::make_unique<mock_binding::SkeletonEvent<TestSampleType>>();
+        }));
 
     const auto identifier = MakeInstanceIdentifierWithFieldSlotCount(std::nullopt);
 
     MyGetterOnlySkeleton skeleton{std::make_unique<mock_binding::Skeleton>(), identifier};
 
-    EXPECT_EQ(GetFieldSlotCount(identifier), std::uint16_t{2U});
+    EXPECT_EQ(override_at_factory_call, std::uint16_t{2U});
+    EXPECT_FALSE(SkeletonBaseView{skeleton}.GetSlotCountOverride().has_value());
+    EXPECT_FALSE(GetFieldSlotCount(identifier).has_value());
 }
 
 }  // namespace
