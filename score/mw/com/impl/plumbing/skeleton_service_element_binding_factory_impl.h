@@ -112,8 +112,7 @@ auto CreateSkeletonServiceElement(const InstanceIdentifier& identifier,
             const auto& lola_service_element_instance_deployment = GetServiceElementInstanceDeployment<element_type>(
                 lola_service_instance_deployment, service_element_name_str);
 
-            // Field-construction sidechannel: SkeletonField sets a slot-count override on the parent before
-            // calling the binding factory when WithNotifier is disabled. Only fields use this; events ignore it.
+            // Only fields use the slot-count override (set by SkeletonField when WithNotifier is disabled).
             std::optional<std::uint16_t> slot_count_override{std::nullopt};
             if constexpr (element_type == ServiceElementType::FIELD)
             {

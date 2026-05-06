@@ -109,10 +109,8 @@ class SkeletonBase
 
     ISkeletonBase* skeleton_mock_;
 
-    /// Sidechannel slot used by the field-construction path: a SkeletonField sets this immediately before
-    /// invoking the binding factory and clears it immediately after, so the factory can consult it instead of
-    /// the (read-only) deployment when the field's tag pack disables the notifier surface. Field ctors run
-    /// sequentially during SkeletonBase construction, so a single slot is sufficient — there's no overlap.
+    /// Slot-count override consulted by the binding factory during field construction. Managed by
+    /// SlotCountOverrideGuard.
     std::optional<std::uint16_t> current_slot_count_override_{std::nullopt};
 
     [[nodiscard]] score::Result<void> OfferServiceEvents() const noexcept;
@@ -136,8 +134,6 @@ class SkeletonBaseView
         return skeleton_base_.binding_.get();
     }
 
-    /// Set/clear/read the per-skeleton slot-count override used by the field-construction sidechannel.
-    /// See `SkeletonBase::current_slot_count_override_` for the contract.
     void SetSlotCountOverride(std::optional<std::uint16_t> slot_count) noexcept
     {
         skeleton_base_.current_slot_count_override_ = slot_count;
@@ -233,6 +229,30 @@ class SkeletonBaseView
 
   private:
     SkeletonBase& skeleton_base_;
+};
+
+/// RAII: writes a slot-count override on construction, restores the previous value on destruction.
+class SlotCountOverrideGuard
+{
+  public:
+    SlotCountOverrideGuard(SkeletonBase& parent, std::uint16_t slot_count) noexcept
+        : parent_{parent}, previous_override_{SkeletonBaseView{parent_}.GetSlotCountOverride()}
+    {
+        SkeletonBaseView{parent_}.SetSlotCountOverride(slot_count);
+    }
+    ~SlotCountOverrideGuard() noexcept
+    {
+        SkeletonBaseView{parent_}.SetSlotCountOverride(previous_override_);
+    }
+
+    SlotCountOverrideGuard(const SlotCountOverrideGuard&) = delete;
+    SlotCountOverrideGuard& operator=(const SlotCountOverrideGuard&) = delete;
+    SlotCountOverrideGuard(SlotCountOverrideGuard&&) = delete;
+    SlotCountOverrideGuard& operator=(SlotCountOverrideGuard&&) = delete;
+
+  private:
+    SkeletonBase& parent_;
+    std::optional<std::uint16_t> previous_override_;
 };
 
 score::cpp::optional<InstanceIdentifier> GetInstanceIdentifier(const InstanceSpecifier& specifier);
